@@ -1,0 +1,26 @@
+# Ignore Python cache and environment files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environments
+venv/
+.env
+
+# Ignore test and API files
+test_gnews_backend.py
+api_test.py
+
+# Ignore Node.js modules
+node_modules/
+
+# Ignore dotenv files
+.env
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore other editor/project files
+*.vscode/
