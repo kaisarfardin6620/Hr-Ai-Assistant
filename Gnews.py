@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import requests
+import feedparser
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 from openai import OpenAI, OpenAIError
 from dotenv import load_dotenv
@@ -17,9 +18,8 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
-gnews_api_key = os.getenv("g-news_api_key")
-if not openai_api_key or not gnews_api_key:
-    raise RuntimeError("OPENAI_API_KEY or GNEWS_API_KEY not found in environment variables.")
+if not openai_api_key:
+    raise RuntimeError("OPENAI_API_KEY not found in environment variables.")
 
 # Initialize OpenAI client
 try:
@@ -100,47 +100,74 @@ def get_topic_tag(matched_topic, article_content):
         return default_tag
 
 # Fetch news from GNews API
+
+# RSS feed sources for each HR topic (with source names)
+RSS_FEEDS = {
+    "hr strategy and leadership": [
+        {"name": "HR Executive", "url": "https://hrexecutive.com/feed/"},
+        {"name": "Harvard Business Review - Leadership", "url": "https://hbr.org/feed/section/leadership"},
+        {"name": "HR Dive - Strategy", "url": "https://www.hrdive.com/rss/strategy/"},
+        {"name": "SHRM - Executive HR", "url": "https://www.shrm.org/rss/feed.aspx?category=executive"},
+        {"name": "HR Grapevine", "url": "https://www.hrgrapevine.com/rss"}
+    ],
+    "workforce compliance and regulation": [
+        {"name": "EEOC Newsroom", "url": "https://www.eeoc.gov/newsroom/rss.xml"},
+        {"name": "HR Dive - Compliance", "url": "https://www.hrdive.com/rss/compliance/"},
+        {"name": "SHRM - Legal Issues", "url": "https://www.shrm.org/rss/feed.aspx?category=legal"},
+        {"name": "Law360 - Employment", "url": "https://www.law360.com/employment-authority/rss"}
+    ],
+    "talent acquisition and labor trends": [
+        {"name": "ERE Media", "url": "https://www.eremedia.com/rss"},
+        {"name": "HR Dive - Talent Acquisition", "url": "https://www.hrdive.com/rss/talent-acquisition/"},
+        {"name": "Workology - Recruiting", "url": "https://workology.com/category/recruiting/feed/"},
+        {"name": "Undercover Recruiter", "url": "https://theundercoverrecruiter.com/feed/"}
+    ],
+    "compensation, benefits and rewards": [
+        {"name": "BenefitsPRO", "url": "https://www.benefitspro.com/rss/"},
+        {"name": "SHRM - Compensation & Benefits", "url": "https://www.shrm.org/rss/feed.aspx?category=compensation"},
+        {"name": "HR Dive - Benefits", "url": "https://www.hrdive.com/rss/benefits/"}
+    ],
+    "people development and culture": [
+        {"name": "Chief Learning Officer", "url": "https://www.chieflearningofficer.com/feed/"},
+        {"name": "HR Bartender", "url": "https://www.hrbartender.com/feed/"},
+        {"name": "Workology - HR Development", "url": "https://workology.com/category/hr/feed/"}
+    ]
+}
+
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(min=1, max=5))
 def fetch_news(topic: str, max_results=5) -> list:
-    """Fetches news articles from GNews API for a given topic, filters by HR domains, and uses the maximum lookback window (30 days)."""
-    url = "https://gnews.io/api/v4/search"
-    hr_domains = [
-        "shrm.org",
-        "hrdive.com",
-        "fortune.com",
-        "forbes.com"
-    ]
-    params = {
-        "q": topic,
-        "token": gnews_api_key,
-        "lang": "en",
-        "max": 50,  # fetch more to allow for filtering, GNews max is 100
-        "sortby": "relevance",
-        "in": "title,description,content",
-        "from": (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
-    }
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        articles = response.json().get("articles", [])
-        # Filter for HR domains
-        filtered = []
-        seen_titles = set()
-        for article in articles:
-            url_val = article.get("url", "").lower()
-            if any(domain in url_val for domain in hr_domains):
-                title = article.get("title", "").lower()
-                if title and title not in seen_titles:
-                    seen_titles.add(title)
-                    filtered.append(article)
-            if len(filtered) >= max_results:
+    feeds = RSS_FEEDS.get(topic.lower(), [])
+    articles = []
+    seen_titles = set()
+    for feed in feeds:
+        feed_name = feed["name"]
+        feed_url = feed["url"]
+        try:
+            parsed = feedparser.parse(feed_url)
+            for entry in parsed.entries:
+                title = entry.get("title", "").strip()
+                if not title or title.lower() in seen_titles:
+                    continue
+                seen_titles.add(title.lower())
+                article = {
+                    "title": title,
+                    "url": entry.get("link", ""),
+                    "description": entry.get("summary", ""),
+                    "content": entry.get("summary", ""),
+                    "source": {"name": feed_name, "feed_url": feed_url},
+                    "publishedAt": entry.get("published", datetime.now().isoformat())
+                }
+                articles.append(article)
+                if len(articles) >= max_results:
+                    break
+            if len(articles) >= max_results:
                 break
-        if not filtered:
-            logger.warning(f"No articles found for topic: {topic} in HR domains.")
-        return filtered
-    except Exception as e:
-        logger.error(f"Error fetching news for topic {topic}: {e}")
-        return []
+        except Exception as e:
+            logger.error(f"Error parsing RSS feed {feed_url}: {e}")
+            continue
+    if not articles:
+        logger.warning(f"No articles found for topic: {topic} in RSS feeds.")
+    return articles
 
 # Summarize articles using OpenAI
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(min=1, max=5))
