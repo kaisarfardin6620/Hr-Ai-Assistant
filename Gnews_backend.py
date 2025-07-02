@@ -122,10 +122,36 @@ RSS_FEEDS = {
 }
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(min=1, max=5))
-def fetch_news(topic: str, max_results=5) -> list:
+def fetch_news(topic: str, max_results=15, days_lookback=30, per_day=True, target_date=None) -> list:
+    """
+    Fetch news articles for a topic, filtered by date.
+    - days_lookback: Only include articles from the last N days (default 7).
+    - per_day: If True, fetch all articles from today (or target_date if provided), ignoring max_results.
+    - target_date: If per_day is True, fetch articles from this date (YYYY-MM-DD), else today.
+    """
     feeds = RSS_FEEDS.get(topic.lower(), [])
     articles = []
     seen_titles = set()
+    now = datetime.now()
+    # Helper to make a datetime offset-naive or offset-aware to match published_dt
+    def match_tz(dt, ref_dt):
+        if dt.tzinfo and not ref_dt.tzinfo:
+            return dt.replace(tzinfo=None)
+        elif not dt.tzinfo and ref_dt.tzinfo:
+            return dt.replace(tzinfo=ref_dt.tzinfo)
+        return dt
+
+    if per_day:
+        if target_date:
+            try:
+                day_start = datetime.strptime(target_date, "%Y-%m-%d")
+            except Exception:
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+    else:
+        lookback_start = now - timedelta(days=days_lookback)
     for feed in feeds:
         feed_name = feed["name"]
         feed_url = feed["url"]
@@ -135,6 +161,24 @@ def fetch_news(topic: str, max_results=5) -> list:
                 title = entry.get("title", "").strip()
                 if not title or title.lower() in seen_titles:
                     continue
+                published_str = entry.get("published", None)
+                if published_str:
+                    try:
+                        published_dt = parser.parse(published_str)
+                    except Exception:
+                        published_dt = now
+                else:
+                    published_dt = now
+                # Date filtering (handle tz-aware/naive)
+                if per_day:
+                    ds = match_tz(day_start, published_dt)
+                    de = match_tz(day_end, published_dt)
+                    if not (ds <= published_dt < de):
+                        continue
+                else:
+                    lbs = match_tz(lookback_start, published_dt)
+                    if published_dt < lbs:
+                        continue
                 seen_titles.add(title.lower())
                 article = {
                     "title": title,
@@ -142,12 +186,12 @@ def fetch_news(topic: str, max_results=5) -> list:
                     "description": entry.get("summary", ""),
                     "content": entry.get("summary", ""),
                     "source": {"name": feed_name, "feed_url": feed_url},
-                    "publishedAt": entry.get("published", datetime.now().isoformat())
+                    "publishedAt": published_dt.isoformat()
                 }
                 articles.append(article)
-                if len(articles) >= max_results:
+                if not per_day and len(articles) >= max_results:
                     break
-            if len(articles) >= max_results:
+            if not per_day and len(articles) >= max_results:
                 break
         except Exception as e:
             logger.error(f"Error parsing RSS feed {feed_url}: {e}")

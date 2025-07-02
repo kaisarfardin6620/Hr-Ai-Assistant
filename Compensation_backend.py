@@ -25,11 +25,14 @@ conversation_history = {}
 
 # Load the system prompt (cached)
 def load_prompt(filepath="prompts.json", prompt_key="COMPENSATION"):
-    cache_key = f"{filepath}:{prompt_key}"
+    # Always load prompts.json from the same directory as this script
+    dir_path = os.path.dirname(os.path.abspath(__file__))
+    prompt_path = os.path.join(dir_path, filepath)
+    cache_key = f"{prompt_path}:{prompt_key}"
     if cache_key in prompt_cache:
         return prompt_cache[cache_key]
     try:
-        with open(filepath, "r") as file:
+        with open(prompt_path, "r") as file:
             data = json.load(file)
             prompt = data[prompt_key]
             prompt_cache[cache_key] = prompt

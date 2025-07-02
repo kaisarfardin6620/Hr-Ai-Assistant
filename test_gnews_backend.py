@@ -21,7 +21,7 @@ def main():
         sys.exit(1)
     user_id = input("Enter a user ID (optional): ").strip() or None
     # Always use the correct path to prompts.json in the HR folder
-    prompt_file = "c:/Users/kaisa/OneDrive/Desktop/Ai projects/HR/prompts.json"
+    prompt_file = "prompts.json"
     model = input("Enter OpenAI model (default: gpt-4-turbo): ").strip() or "gpt-4-turbo"
     print("\nFetching and summarizing news...\n")
     result = get_news_summaries(topic, user_id, prompt_file, model)
